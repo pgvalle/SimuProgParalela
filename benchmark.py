@@ -44,9 +44,9 @@ def main():
 
     try:
         n = int(sys.argv[1])
-        assert(n >= 1)
+        assert(n >= 2)
     except:
-        print("N must be an integer greater than 0.")
+        print("N must be an integer greater than 1.")
         sys.exit(1)
 
     compile_programs()
