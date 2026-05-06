@@ -49,12 +49,12 @@ def main():
         print("N must be an integer greater than 1.")
         sys.exit(1)
 
-    compile_programs()
-
     input_files = sorted(glob.glob("inputs/*.txt"))
     if not input_files:
         print("No input files found in inputs/")
         sys.exit(1)
+
+    compile_programs()
 
     print(f"\nStarting benchmark with {n} runs per input...")
     
