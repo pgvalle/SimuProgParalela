@@ -6,16 +6,19 @@ import glob
 import csv
 
 def compile_programs():
+    os.mkdir("bin")
     print("Compiling seq.c...")
-    subprocess.run(["gcc", "-O3", "seq.c", "-o", "seq"], check=True)
+    subprocess.run(["gcc", "-O3",
+                    "src/seq.c", "-o", "bin/seq"], check=True)
     print("Compiling omp.c...")
-    subprocess.run(["gcc", "-O3", "-fopenmp", "omp.c", "-o", "omp"], check=True)
+    subprocess.run(["gcc", "-O3", "-fopenmp",
+                    "src/omp.c", "-o", "bin/omp"], check=True)
 
 def run_benchmark(executable, input_file, n):
     times = []
     for i in range(n):
         with open(input_file, "r") as f:
-            result = subprocess.run([f"./{executable}"], stdin=f, capture_output=True, text=True)
+            result = subprocess.run([f"{executable}"], stdin=f, capture_output=True, text=True)
             if result.returncode == 0:
                 try:
                     # The program outputs the time in seconds
@@ -60,9 +63,9 @@ def main():
             basename = os.path.basename(input_file)
             
             print(f"\nrunning seq.c on {basename}...")
-            seq_times = run_benchmark("seq", input_file, n)
+            seq_times = run_benchmark("./bin/seq", input_file, n)
             print(f"running omp.c on {basename}...")
-            omp_times = run_benchmark("omp", input_file, n)
+            omp_times = run_benchmark("./bin/omp", input_file, n)
 
             if seq_times and omp_times:
                 seq_avg = statistics.mean(seq_times)
