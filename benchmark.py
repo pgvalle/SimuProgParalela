@@ -17,11 +17,11 @@ def compile_programs():
     subprocess.run(["mpicc", "-O3",
                     "src/mpi.c", "-o", "bin/mpi"], check=True)
 
-def run_benchmark(executable, input_file, n):
+def run_benchmark(command, input_file, n):
     times = []
     for i in range(n):
         with open(input_file, "r") as f:
-            result = subprocess.run([f"{executable}"], stdin=f, capture_output=True, text=True)
+            result = subprocess.run([f"{command}"], stdin=f, capture_output=True, text=True)
             if result.returncode == 0:
                 try:
                     # The program outputs the time in seconds
@@ -32,7 +32,7 @@ def run_benchmark(executable, input_file, n):
                 except ValueError:
                     pass # Ignore if not a float
             else:
-                print(f"Error running {executable} with {input_file}: {result.stderr}")
+                print(f"Error running {command} with {input_file}: {result.stderr}")
         print(i + 1, end=" ", flush=True)
     print()
     return times
