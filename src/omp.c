@@ -31,56 +31,54 @@ static const uint64_t fat[21] = {
 
 typedef struct {
     int n_verts, n_edges;
-    bool *adj; // adjacency matrix
+    bool adj[400]; // adjacency matrix (max 20 vertices)
 } graph_t;
 
-graph_t read_graph();
-bool test_isomorphism(graph_t g1, graph_t g2);
-bool check_perm(graph_t g1, graph_t g2, int *perm);
-void print_perm(int *perm, int n);
+void read_graph(graph_t *g);
+bool check_isomorphism(const graph_t *g1, const graph_t *g2);
+bool check_perm(const graph_t *g1, const graph_t *g2, const int *perm);
 
 int main() {
-    graph_t g1 = read_graph();
-    graph_t g2 = read_graph();
+    graph_t *g1 = malloc(sizeof(*g1));
+    graph_t *g2 = malloc(sizeof(*g2));
+
+    read_graph(g1);
+    read_graph(g2);
 
 #if 1
-    test_isomorphism(g1, g2);
+    check_isomorphism(g1, g2);
 #else
-    if (test_isomorphism(g1, g2)) {
+    if (check_isomorphism(g1, g2)) {
         printf("the graphs are isomorphic!\n");
     } else {
         printf("the graphs are not isomorphic!\n");
     }
 #endif
 
-    free(g1.adj);
-    free(g2.adj);
+    free(g1);
+    free(g2);
 
     return 0;
 }
 
-graph_t read_graph() {
-    graph_t g;
+void read_graph(graph_t *g) {
+    scanf("%d %d", &g->n_verts, &g->n_edges);
+    memset(g->adj, 0, sizeof(g->adj));
 
-    scanf("%d %d", &g.n_verts, &g.n_edges);
-    g.adj = malloc(g.n_verts * g.n_verts);
-
-    for (int i = 0; i < g.n_edges; i++) {
+    for (int i = 0; i < g->n_edges; i++) {
         int s, d;
         scanf("%d %d", &s, &d);
-        g.adj[s * g.n_verts + d] = true; 
-        g.adj[d * g.n_verts + s] = true;
+        g->adj[s * g->n_verts + d] = true; 
+        g->adj[d * g->n_verts + s] = true;
     }
-
-    return g;
 }
 
-bool test_isomorphism(graph_t g1, graph_t g2) {
-    if (g1.n_verts != g2.n_verts || g1.n_edges != g2.n_edges) {
+bool check_isomorphism(const graph_t *g1, const graph_t *g2) {
+    if (g1->n_verts != g2->n_verts || g1->n_edges != g2->n_edges) {
         return false;
     }
 
-    int n = g1.n_verts;
+    int n = g1->n_verts;
     int indices[n];
     bool isomorphism = false;
 
@@ -137,21 +135,16 @@ bool test_isomorphism(graph_t g1, graph_t g2) {
     return isomorphism;
 }
 
-bool check_perm(graph_t g1, graph_t g2, int *perm) {
-    int n = g1.n_verts;
+bool check_perm(const graph_t *g1, const graph_t *g2, const int *perm) {
+    int n = g1->n_verts;
+
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
-            if(g1.adj[i*n+j] != g2.adj[perm[i]*n+perm[j]]) {
+            if(g1->adj[i*n+j] != g2->adj[perm[i]*n+perm[j]]) {
                 return false;
             }
         }
     }
-    return true;
-}
 
-void print_perm(int *perm, int n) {
-    for (int i = 0; i < n; i++) {
-        printf("%d ", perm[i]);
-    }
-    printf("\n");
+    return true;
 }
