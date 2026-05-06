@@ -31,25 +31,26 @@ static const uint64_t fat[21] = {
     2432902008176640000
 };
 
+int rank, size;
+
 typedef struct {
     int n_verts, n_edges;
     bool adj[400]; // adjacency matrix (max 20 vertices)
 } graph_t;
 
 void read_graph(graph_t *g);
-bool check_isomorphism(const graph_t *g1, const graph_t *g2, int rank, int size);
+bool check_isomorphism(const graph_t *g1, const graph_t *g2);
 bool check_perm(const graph_t *g1, const graph_t *g2, const int *perm);
 
 int main(int argc, char** argv) {
-    int rank, size;
-    graph_t *g1 = malloc(sizeof(*g1));
-    graph_t *g2 = malloc(sizeof(*g2));
+    graph_t *ga = malloc(2 * sizeof(*ga));
 
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     // register new type
+
     int blockcounts[3] = {1, 1, 400};
     MPI_Aint offsets[3] = {
         offsetof(graph_t, n_verts),
@@ -57,25 +58,25 @@ int main(int argc, char** argv) {
         offsetof(graph_t, adj)
     };
     MPI_Datatype types[3] = {MPI_INT, MPI_INT, MPI_C_BOOL};
-    MPI_Datatype mpi_graph_t;
+    MPI_Datatype mpi_graph;
 
-    MPI_Type_create_struct(3, blockcounts, offsets, types, &mpi_graph_t);
-    MPI_Type_commit(&mpi_graph_t);
+    MPI_Type_create_struct(3, blockcounts, offsets, types, &mpi_graph);
+    MPI_Type_commit(&mpi_graph);
 
     // only rank 0 will do this
     if (rank == 0) {
-        read_graph(g1);
-        read_graph(g2);
-        MPI_Bcast(g1, )
-        // construct message(g1, g2)
-        // send in broadcast for everyone
+        read_graph(&ga[0]);
+        read_graph(&ga[1]);
+        MPI_Bcast(ga, 2, mpi_graph, 0, MPI_COMM_WORLD);
+        printf("p0 sent the graphs to everyone\n");
     } else { // other ranks receive
-        // recv g1, g2
-        // init graphs based on msg
+        MPI_Bcast(ga, 2, mpi_graph, 0, MPI_COMM_WORLD);
+        printf("p%d received the graphs\n", rank);
     }
 
     // everyone checks
-    bool iso = test_isomorphism_mpi(g1, g2, rank, size);
+    bool iso = check_isomorphism(&ga[0], &ga[1]);
+    printf("p%d says: %sisomorphic\n", rank, (iso ? "" : "not "));
 
     // rank 0 aggregates
     if (rank == 0) {
@@ -83,10 +84,10 @@ int main(int argc, char** argv) {
         // do the check and report result
     } else { // other ranks send their results
         // send iso
+        // MPI_Send(&iso, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD);
     }
 
-    free(g1.adj);
-    free(g2.adj);
+    free(ga);
 
     MPI_Finalize();
 
@@ -105,14 +106,13 @@ void read_graph(graph_t *g) {
     }
 }
 
-bool check_isomorphism(const graph_t *g1, const graph_t *g2, int rank, int size) {
+bool check_isomorphism(const graph_t *g1, const graph_t *g2) {
     if (g1->n_verts != g2->n_verts || g1->n_edges != g2->n_edges) {
         return false;
     }
 
-    int n = g1.n_verts;
+    int n = g1->n_verts;
     int indices[n];
-    bool isomorphism = flse;
 
     for (int i = 0; i < n; i++) {
         indices[i] = i;
