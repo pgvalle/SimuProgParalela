@@ -39,24 +39,22 @@ bool check_isomorphism(const graph_t *g1, const graph_t *g2);
 bool check_perm(const graph_t *g1, const graph_t *g2, const int *perm);
 
 int main() {
-    graph_t *g1 = malloc(sizeof(*g1));
-    graph_t *g2 = malloc(sizeof(*g2));
+    graph_t *ga = malloc(2 * sizeof(*ga));
 
-    read_graph(g1);
-    read_graph(g2);
+    read_graph(&ga[0]);
+    read_graph(&ga[1]);
 
 #if 1
-    check_isomorphism(g1, g2);
+    check_isomorphism(&ga[0], &ga[1]);
 #else
-    if (check_isomorphism(g1, g2)) {
+    if (check_isomorphism(&ga[0], &ga[1])) {
         printf("the graphs are isomorphic!\n");
     } else {
         printf("the graphs are not isomorphic!\n");
     }
 #endif
 
-    free(g1);
-    free(g2);
+    free(ga);
 
     return 0;
 }
