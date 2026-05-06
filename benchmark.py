@@ -13,6 +13,9 @@ def compile_programs():
     print("Compiling omp.c...")
     subprocess.run(["gcc", "-O3", "-fopenmp",
                     "src/omp.c", "-o", "bin/omp"], check=True)
+    print("Compiling mpi.c...")
+    subprocess.run(["mpicc", "-O3",
+                    "src/mpi.c", "-o", "bin/mpi"], check=True)
 
 def run_benchmark(executable, input_file, n):
     times = []
