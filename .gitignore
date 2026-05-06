@@ -1,3 +1,2 @@
 *.csv
-seq
-omp
+bin/
