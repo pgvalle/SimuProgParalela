@@ -6,15 +6,15 @@ import glob
 import csv
 
 def compile_programs():
-    os.mkdir("bin")
+    os.makedirs("bin", exist_ok=True)
     print("Compiling seq.c...")
-    subprocess.run(["gcc", "-O3",
+    subprocess.run(["gcc", "-O3", "-D", "SCRIPT",
                     "src/seq.c", "-o", "bin/seq"], check=True)
     print("Compiling omp.c...")
-    subprocess.run(["gcc", "-O3", "-fopenmp",
+    subprocess.run(["gcc", "-O3", "-fopenmp", "-D", "SCRIPT",
                     "src/omp.c", "-o", "bin/omp"], check=True)
     print("Compiling mpi.c...")
-    subprocess.run(["mpicc", "-O3",
+    subprocess.run(["mpicc", "-O3", "-D", "SCRIPT",
                     "src/mpi.c", "-o", "bin/mpi"], check=True)
 
 def run_benchmark(command, input_file, n):
