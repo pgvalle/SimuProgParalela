@@ -76,10 +76,9 @@ int main(int argc, char** argv) {
         }
 
         delta = MPI_Wtime() - delta;
-
-#if 1
         printf("%f\n", delta);
-#else
+
+#ifndef SCRIPT
         if (isomorphic) {
             printf("the graphs are isomorphic!\n");
         } else {

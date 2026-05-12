@@ -44,7 +44,7 @@ int main() {
     read_graph(&ga[0]);
     read_graph(&ga[1]);
 
-#if 1
+#ifdef SCRIPT
     check_isomorphism(&ga[0], &ga[1]);
 #else
     if (check_isomorphism(&ga[0], &ga[1])) {
