@@ -32,6 +32,7 @@ static const uint64_t fat[21] = {
 };
 
 int rank, size;
+double delta;
 
 typedef struct {
     int n_verts, n_edges;
@@ -49,46 +50,47 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    // register new type
-
-    int blockcounts[3] = {1, 1, 400};
-    MPI_Aint offsets[3] = {
-        offsetof(graph_t, n_verts),
-        offsetof(graph_t, n_edges),
-        offsetof(graph_t, adj)
-    };
-    MPI_Datatype types[3] = {MPI_INT, MPI_INT, MPI_C_BOOL};
-    MPI_Datatype mpi_graph;
-
-    MPI_Type_create_struct(3, blockcounts, offsets, types, &mpi_graph);
-    MPI_Type_commit(&mpi_graph);
-
     // only rank 0 will do this
     if (rank == 0) {
+        delta = MPI_Wtime();
         read_graph(&ga[0]);
         read_graph(&ga[1]);
-        MPI_Bcast(ga, 2, mpi_graph, 0, MPI_COMM_WORLD);
-        printf("p0 sent the graphs to everyone\n");
-    } else { // other ranks receive
-        MPI_Bcast(ga, 2, mpi_graph, 0, MPI_COMM_WORLD);
-        printf("p%d received the graphs\n", rank);
     }
 
+    // send/receive
+    MPI_Bcast(ga, 2*sizeof(*ga), MPI_BYTE, 0, MPI_COMM_WORLD);
+
     // everyone checks
-    bool iso = check_isomorphism(&ga[0], &ga[1]);
-    printf("p%d says: %sisomorphic\n", rank, (iso ? "" : "not "));
+    bool isomorphic = check_isomorphism(&ga[0], &ga[1]);
 
     // rank 0 aggregates
     if (rank == 0) {
-        // recv other ranks messages
-        // do the check and report result
+        bool others_opinion;
+        MPI_Status status;
+        for (int i = 1; i < size; i++) {
+            MPI_Recv(&others_opinion, 1, MPI_C_BOOL,
+                     MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+            if (others_opinion) {
+                isomorphic = true;
+            }
+        }
+
+        delta = MPI_Wtime() - delta;
+
+#if 1
+        printf("%f\n", delta);
+#else
+        if (isomorphic) {
+            printf("the graphs are isomorphic!\n");
+        } else {
+            printf("the graphs are not isomorphic!\n");
+        }
+#endif
     } else { // other ranks send their results
-        // send iso
-        // MPI_Send(&iso, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD);
+        MPI_Send(&isomorphic, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD);
     }
 
     free(ga);
-
     MPI_Finalize();
 
     return 0;
