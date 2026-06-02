@@ -52,9 +52,9 @@ int main(int argc, char** argv) {
 
     // only rank 0 will do this
     if (rank == 0) {
-        delta = MPI_Wtime();
         read_graph(&ga[0]);
         read_graph(&ga[1]);
+        delta = MPI_Wtime();
     }
 
     // send/receive
