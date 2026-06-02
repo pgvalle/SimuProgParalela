@@ -70,10 +70,18 @@ def grouped_errorbar_plot(plt, np, labels, series, title, ylabel, output_path, l
         "omp": "OpenMP",
         "mpi": "MPI",
     }
+    implementation_colors = {
+        "seq": "C0",
+        "omp": "C1",
+        "mpi": "C2",
+    }
 
     for idx, (name, values, errors) in enumerate(series):
         offset = (idx - (len(series) - 1) / 2) * width
-        bar_kwargs = {"label": legend_labels.get(name, name.upper())}
+        bar_kwargs = {
+            "label": legend_labels.get(name, name.upper()),
+            "color": implementation_colors.get(name),
+        }
         if errors is not None:
             bar_kwargs.update({
                 "yerr": errors,
