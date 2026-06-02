@@ -94,7 +94,7 @@ def grouped_errorbar_plot(plt, np, labels, series, title, ylabel, output_path, l
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.set_xticklabels(labels, rotation=35, ha="center")
     ax.grid(axis="y", linestyle="--", alpha=0.4)
     ax.legend()
 
