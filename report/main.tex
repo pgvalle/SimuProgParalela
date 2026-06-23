@@ -9,12 +9,40 @@
 \usepackage{graphicx}
 \usepackage{float}
 \usepackage[hidelinks]{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+    backgroundcolor=\color{gray!5},
+    basicstyle=\ttfamily\scriptsize\singlespacing,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    commentstyle=\color{green!60!black},
+    keywordstyle=\color{blue},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    language=C,
+    xleftmargin=1cm,
+    xrightmargin=1cm
+}
+
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd{\@footnotetext}{\footnotesize}{\scriptsize}{}{}
+\makeatother
 
 \onehalfspacing
 
 \graphicspath{{results/}{report/results/}}
 
-\title{\textbf{Análise de desempenho das versões sequencial, OpenMP e MPI do problema de isomorfismo em grafos}}
+\title{\textbf{Análise de desempenho das versões sequencial, OpenMP e MPI do
+problema de isomorfismo em grafos}}
 \author{Pedro Gabriel do Valle Nogueira}
 \date{\today}
 
@@ -22,34 +50,315 @@
 
 \maketitle
 
-\section{Objetivo}
+\section{Problema}
 
-Este relatório compara o desempenho de três implementações do mesmo algoritmo:
+O problema do Isomorfismo de Grafos consiste em determinar se dois grafos
+direcionados ou não direcionados,
+$G_1 = (V_1, E_1)$ e $G_2 = (V_2, E_2)$,
+são estruturalmente equivalentes.
+Em termos matemáticos,
+busca-se estabelecer se existe uma bijeção $\phi: V_1 \to V_2$ tal que,
+para qualquer par de vértices $u, v \in V_1$,
+a adjacência seja preservada:
+\begin{equation}
+(u, v) \in E_1 \iff (\phi(u), \phi(v)) \in E_2
+\end{equation}
+
+Diferentemente de problemas que demandam um volume fixo de computação (como a
+multiplicação de matrizes),
+a resolução do isomorfismo de grafos por força bruta é um problema de decisão booleano (isomórfico ou não).
+Assim,
+o tempo de execução depende crucialmente de \textit{quando} a permutação correta é encontrada.
+Em grafos isomórficos,
+se o mapeamento correto for testado logo nas iterações iniciais,
+o algoritmo terminará quase instantaneamente.
+Em grafos não-isomórficos,
+contudo,
+é obrigatório explorar exaustivamente todas as $N!$ permutações para confirmar a não equivalência.
+Essa característica gera impactos profundos nos resultados de desempenho e nos speedups das versões paralelas,
+os quais são apresentados e discutidos na Seção~\ref{sec:analise}.
+
+\section{Processo de paralelização}
+
+O algoritmo original baseava-se no tradicional Algoritmo de Heap para gerar as permutações.
+Inicialmente,
+isso era feito de forma recursiva,
+o que dificultava o controle e a paralelização direta.
+A implementação de uma versão iterativa do algoritmo de Heap resolveu o problema da recursão,
+porém manteve um obstáculo crítico à paralelização.
+
+Como ilustrado no Código~\ref{lst:heap-iter},
+o loop principal de geração de permutações do algoritmo de Heap possui um fluxo altamente não-linear.
+A variável de controle do loop,
+\texttt{i},
+retorna frequentemente para o valor 1 (linha~\ref{line:reset-i}) baseado no estado do array de controle \texttt{c} (linha~\ref{line:cond-i}).
+
+\begin{lstlisting}[language=C, escapeinside={(*}{*)}, caption={Versão iterativa do Algoritmo de Heap para geração de permutações.}, label={lst:heap-iter}]
+// Inicialização do array de permutação A e do array de controle c
+for (int i = 0; i < n; i++) {
+    A[i] = i;
+    c[i] = 0;
+}
+
+int i = 1;
+while (i < n) {
+    if (c[i] < i) { (*\label{line:cond-i}*)
+        if (i % 2 == 0) {
+            swap(&A[0], &A[i]);
+        } else {
+            swap(&A[c[i]], &A[i]);
+        }
+        // Processa a nova permutação gerada em A...
+        c[i]++;
+        i = 1; (*\label{line:reset-i}*) // Reinício da variável de controle i
+    } else {
+        c[i] = 0;
+        i++;
+    }
+}
+\end{lstlisting}
+
+Essa não-linearidade é o impedimento chave para a paralelização direta com OpenMP,
+uma vez que a diretiva \texttt{\#pragma omp parallel for} exige que a variável de iteração percorra o espaço de busca de forma linear,
+com limites bem definidos do início ao fim e sem dependências de dados entre passos sucessivos.
+No caso do algoritmo de Heap,
+cada permutação é gerada aplicando uma troca (swap) sobre o estado resultante da permutação anterior,
+impossibilitando calcular uma permutação arbitrária isolada sem antes processar todas as anteriores.
+
+Para contornar este limitador,
+o algoritmo foi completamente reestruturado substituindo a geração de Heap pelo método da decomposição fatorial (ou representação em base fatorádica),
+conforme mostrado no Código~\ref{lst:factoradic}.
+
+\begin{lstlisting}[language=C, caption={Geração independente de permutações via Decomposição Fatorial.}, label={lst:factoradic}]
+// n representa o número de vértices e indices[] contém [0, 1, ..., n-1]
+for (uint64_t i = 0; i < fat[n]; i++) {
+    uint64_t factoradic[n], v = i;
+    int perm[n], local_indices[n];
+
+    memcpy(local_indices, indices, sizeof(indices));
+
+    for (int j = 0; j < n; j++) {
+        uint64_t q = v / fat[n-j-1];
+        v %= fat[n-j-1];
+        factoradic[j] = q;
+        perm[j] = local_indices[q];
+
+        // Remove o índice local já utilizado
+        for (int k = q; k < n-1; k++) {
+            local_indices[k] = local_indices[k+1];
+        }
+    }
+
+    if (check_perm(g1, g2, perm)) {
+        isomorphism = true;
+        break;
+    }
+}
+\end{lstlisting}
+
+O método da decomposição fatorial consiste em associar de forma unívoca cada inteiro $i \in [0, N! - 1]$ a uma permutação única do conjunto de índices.
+O número $i$ é convertido para o sistema fatorádico,
+e os coeficientes resultantes são utilizados para selecionar sucessivamente elementos de uma lista ordenada.
+Uma explicação detalhada sobre o mapeamento entre números fatorádicos e permutações pode ser encontrada em Franco (2012) \footnote{\url{https://jhafranco.com/2012/02/07/generating-permutations-from-factoradic-numbers/}}.
+
+A principal vantagem dessa técnica é que as iterações do loop tornam-se completamente independentes.
+Qualquer thread (ou processo) pode computar diretamente a $i$-ésima permutação de maneira isolada,
+sem conhecer o histórico das iterações anteriores.
+Abaixo,
+são apresentados os detalhes e as implementações das duas abordagens de paralelização desenvolvidas.
+
+\subsection{Paralelização com OpenMP}
+
+A versão paralela com OpenMP foi implementada aplicando a diretiva \texttt{\#pragma omp parallel} para criar um time de threads,
+e a diretiva \texttt{\#pragma omp for} para distribuir as iterações do loop linear do espaço de busca.
+O trecho de código correspondente é apresentado no Código~\ref{lst:openmp-code}.
+
+\begin{lstlisting}[language=C, caption={Paralelização do loop de busca usando OpenMP com variáveis locais de thread e sincronização crítica.}, label={lst:openmp-code}]
+#pragma omp parallel shared(n, indices, isomorphism)
+{
+    bool local_isomorphism = false;
+
+    #pragma omp for
+    for (uint64_t i = 0; i < fat[n]; i++) {
+        if (local_isomorphism) {
+            continue;
+        }
+
+        uint64_t factoradic[n];
+        uint64_t v = i;
+        int perm[n], local_indices[n];
+
+        memcpy(local_indices, indices, sizeof(indices));
+
+        for (int j = 0; j < n; j++) {
+            uint64_t q = v / fat[n-j-1];
+            v %= fat[n-j-1];
+            factoradic[j] = q;
+            perm[j] = local_indices[q];
+
+            for (int k = q; k < n-1; k++) {
+                local_indices[k] = local_indices[k+1];
+            }
+        }
+
+        if (check_perm(g1, g2, perm)) {
+            local_isomorphism = true;
+        }
+    }
+
+    (*\label{line:omp-critical}*)#pragma omp critical
+    if (local_isomorphism) {
+        isomorphism = local_isomorphism;
+    }
+}
+\end{lstlisting}
+
+Para otimizar a concorrência e evitar gargalos de sincronização ou condições de corrida (race conditions) no acesso ao sinalizador compartilhado \texttt{isomorphism},
+a implementação introduz uma variável booleana local de thread chamada \texttt{local\_isomorphism}.
+Cada thread mantém seu próprio estado local de descoberta de isomorfismo.
+No início de cada iteração,
+a thread verifica \texttt{local\_isomorphism} e executa um \texttt{continue} para evitar computações redundantes se ela própria já encontrou uma resposta válida.
+Somente após a conclusão do loop de iterações,
+as threads atualizam de forma segura a variável compartilhada global numa região crítica (bloco \texttt{\#pragma omp critical}),
+o que minimiza o custo de locks durante a execução paralela.
+
+\subsection{Paralelização com MPI}
+
+A versão paralela utilizando MPI baseia-se na divisão estática do espaço de busca entre múltiplos processos independentes.
+O código correspondente para a divisão do intervalo de busca e execução local é ilustrado no Código~\ref{lst:mpi-code}.
+
+\begin{lstlisting}[language=C, caption={Divisão estática do espaço de busca entre os processos MPI baseada em rank e size.}, label={lst:mpi-code}]
+// range de busca dividido estaticamente
+uint64_t range = fat[n] / size;
+uint64_t start = rank * range;
+uint64_t end = (rank + 1) * range;
+
+if (rank == size - 1) {
+    end += fat[n] % size;
+}
+
+for (uint64_t i = start; i < end; i++) {
+    uint64_t factoradic[n];
+    uint64_t v = i;
+    int perm[n], local_indices[n];
+
+    memcpy(local_indices, indices, sizeof(indices));
+
+    for (int j = 0; j < n; j++) {
+        uint64_t q = v / fat[n-j-1];
+        v %= fat[n-j-1];
+        factoradic[j] = q;
+        perm[j] = local_indices[q];
+
+        for (int k = q; k < n-1; k++) {
+            local_indices[k] = local_indices[k+1];
+        }
+    }
+
+    if (check_perm(g1, g2, perm)) {
+        return true;
+    }
+}
+\end{lstlisting}
+
+A arquitetura de processamento paralelo no MPI funciona através das seguintes etapas:
+\begin{enumerate}
+    \item \textbf{Inicialização e Broadcast}:
+    Apenas o processo de identificação zero (\texttt{rank = 0}) faz a leitura dos grafos de entrada a partir da entrada padrão.
+    Em seguida,
+    os dados dos grafos são distribuídos para todos os processos participantes do comunicador global por meio de uma transmissão coletiva via \texttt{MPI\_Bcast}.
+    \item \textbf{Divisão Estática do Trabalho}:
+    Cada processo calcula de forma autônoma seu subintervalo de busca baseado em seu \texttt{rank} (identificador do processo) e no \texttt{size} (número total de processos).
+    O tamanho do bloco de busca de cada processo é dado por $range = N! / size$,
+    com o último processo (\texttt{rank = size - 1}) absorvendo o resto da divisão inteira.
+    \item \textbf{Agregação e Redução de Resultados}:
+    Cada processo executa a varredura linear do seu intervalo atribuído.
+    Se algum processo encontra um isomorfismo válido,
+    retorna imediatamente \texttt{true}.
+    Ao final do processamento local,
+    os processos com \texttt{rank > 0} enviam seu resultado booleano ao processo master (\texttt{rank = 0}) por meio de envios ponto a ponto com \texttt{MPI\_Send}.
+    O processo 0 recebe os relatórios individuais com \texttt{MPI\_Recv} e faz a agregação final para definir se a equivalência estrutural dos grafos é verdadeira.
+\end{enumerate}
+
+\section{Experimentos}
+
+\subsection{Organização das Entradas}
+
+As entradas fornecidas ao benchmark são pares de grafos organizados em arquivos sob duas categorias fundamentais.
+As entradas isomórficas (\texttt{iso}) contêm grafos que de fato possuem mapeamentos equivalentes,
+de modo que a busca pode terminar de forma antecipada (\textit{early exit}) caso a permutação correta seja encontrada.
+Já as entradas não-isomórficas (\texttt{noniso}) contêm grafos estruturalmente distintos;
+nestes casos,
+o algoritmo é forçado a percorrer todas as $N!$ permutações para garantir a inexistência de um isomorfismo,
+servindo como um teste de estresse puro para o rendimento computacional dos núcleos.
+
+Os arquivos de entrada abrangem diferentes tamanhos de grafos,
+conforme detalhado na Tabela~\ref{tab:entradas},
+que especifica o número de vértices,
+arestas e a quantidade total de permutações que constituem o espaço de busca exaustivo para cada caso.
+
+\begin{table}[H]
+\centering
+\caption{Dimensões das entradas de teste e do espaço de busca correspondente ($N!$ permutações).}
+\label{tab:entradas}
+\begin{tabular}{lccc}
+\hline
+\textbf{Arquivos de Entrada} & \textbf{Vértices ($N$)} & \textbf{Arestas} & \textbf{Espaço de Busca ($N!$)} \\ \hline
+\texttt{1\_iso.txt} / \texttt{1\_noniso.txt} & 11 & 45 & $39.916.800$ \\
+\texttt{2\_iso.txt} / \texttt{2\_noniso.txt} & 9  & 30 & $362.880$    \\
+\texttt{3\_iso.txt} / \texttt{3\_noniso.txt} & 10 & 40 & $3.628.800$  \\
+\texttt{4\_iso.txt} / \texttt{4\_noniso.txt} & 11 & 50 & $39.916.800$ \\ \hline
+\end{tabular}
+\end{table}
+
+\subsection{Configuração Experimental}
+
+Os testes foram executados sob os seguintes parâmetros experimentais:
 
 \begin{itemize}
-    \item \textbf{Sequencial}: versão base, usada como referência.
-    \item \textbf{OpenMP}: versão paralela com \textit{threads}.
-    \item \textbf{MPI}: versão paralela com processos.
+    \item \textbf{Número de repetições}:
+    $N = 15$ rodadas consecutivas para cada entrada (mitigando desvios térmicos e flutuações do sistema operacional).
+    \item \textbf{Número de threads / processos paralelos}:
+    $P = 4$ threads lógicas (para OpenMP) e $P = 4$ processos executando localmente (para MPI),
+    mantendo as duas arquiteturas concorrentes equivalentes.
+    \item \textbf{Máquina utilizada}:
+    Processador Intel Core i5-12450H (arquitetura híbrida Alder Lake,
+    com 4 núcleos de alto desempenho e 4 núcleos de eficiência,
+    12 threads lógicas no total,
+    clock máximo de 4,40 GHz e 12 MB de cache L3).
+    \item \textbf{Configuração de compilação}:
+    Compilador GCC com otimização de nível \texttt{-O3};
+    OpenMP compilado com a flag \texttt{-fopenmp};
+    e versão MPI compilada via \texttt{mpicc}.
 \end{itemize}
-
-O foco da análise é o tempo médio de execução e o \textit{speedup} das versões paralelas em relação à versão sequencial.
-
-\section{Configuração dos Testes}
-
-Os testes foram executados com \texttt{N} repetições para cada entrada. Para comparar OpenMP e MPI de forma equivalente, o número de \textit{threads} do OpenMP foi configurado para ser igual ao número de processos do MPI.
-
-\begin{itemize}
-    \item Número de repetições: \texttt{N = preencher}
-    \item Número de \textit{threads}/processos: \texttt{P = preencher}
-    \item Máquina utilizada: \texttt{preencher}
-    \item Compilação: \texttt{-O3}; OpenMP com \texttt{-fopenmp}; MPI com \texttt{mpicc}
-\end{itemize}
-
-Os resultados brutos foram gerados pelo script \texttt{benchmark.py} e salvos em \texttt{results.csv}. As figuras foram geradas a partir desse arquivo.
 
 \section{Resultados}
 
-A Figura~\ref{fig:runtime} mostra o tempo médio de execução para cada entrada. As barras de erro representam o desvio padrão entre as repetições.
+Os resultados brutos foram extraídos pelo script \texttt{benchmark.py} e gravados no arquivo \texttt{results.csv},
+servindo de base para a geração das figuras e tabelas de análise.
+
+A Tabela~\ref{tab:resultados} resume os tempos médios de execução obtidos e os respectivos speedups.
+As Figuras~\ref{fig:runtime} e \ref{fig:speedup} ilustram graficamente o tempo de execução (em escala logarítmica) e o speedup de ambas as implementações paralelas.
+
+\begin{table}[H]
+\centering
+\caption{Tempos médios de execução (s) e speedups correspondentes para as versões sequencial, OpenMP e MPI ($P=4$, $N=15$).}
+\label{tab:resultados}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lccccc}
+\hline
+\textbf{Arquivo de Entrada} & \textbf{Sequencial (s)} & \textbf{OpenMP (s)} & \textbf{Speedup OpenMP} & \textbf{MPI (s)} & \textbf{Speedup MPI} \\ \hline
+1\_iso.txt    & $1,3066 \pm 0,0521$     & $0,6452 \pm 0,0232$ & $2,03 \pm 0,12$         & $0,6518 \pm 0,0126$  & $2,00 \pm 0,08$      \\
+1\_noniso.txt & $2,1816 \pm 0,0647$     & $0,6902 \pm 0,1517$ & $3,25 \pm 0,46$         & $0,6614 \pm 0,0172$  & $3,30 \pm 0,08$      \\
+2\_iso.txt    & $0,0095 \pm 0,0021$     & $0,0038 \pm 0,0010$ & $2,64 \pm 0,71$         & $0,0069 \pm 0,0005$  & $1,39 \pm 0,31$      \\
+2\_noniso.txt & $0,0169 \pm 0,0022$     & $0,0048 \pm 0,0003$ & $3,58 \pm 0,57$         & $0,0090 \pm 0,0014$  & $1,93 \pm 0,34$      \\
+3\_iso.txt    & $(5,33 \pm 1,72)\times 10^{-6}$ & $0,0236 \pm 0,0013$ & $(2,29 \pm 0,86)\times 10^{-4}$ & $0,0348 \pm 0,0033$  & $(1,55 \pm 0,52)\times 10^{-4}$ \\
+3\_noniso.txt & $0,1715 \pm 0,0053$     & $0,0512 \pm 0,0032$ & $3,36 \pm 0,21$         & $0,0598 \pm 0,0083$  & $2,94 \pm 0,54$      \\
+4\_iso.txt    & $0,2196 \pm 0,0093$     & $0,3193 \pm 0,0944$ & $0,72 \pm 0,12$         & $0,3042 \pm 0,0114$  & $0,72 \pm 0,03$      \\
+4\_noniso.txt & $2,1030 \pm 0,0812$     & $0,6350 \pm 0,0234$ & $3,32 \pm 0,16$         & $0,6431 \pm 0,0133$  & $3,27 \pm 0,11$      \\ \hline
+\end{tabular}
+}
+\end{table}
 
 \begin{figure}[H]
     \centering
@@ -57,8 +366,6 @@ A Figura~\ref{fig:runtime} mostra o tempo médio de execução para cada entrada
     \caption{Tempo médio de execução das versões sequencial, OpenMP e MPI.}
     \label{fig:runtime}
 \end{figure}
-
-A Figura~\ref{fig:speedup} mostra o \textit{speedup} das versões paralelas em relação à versão sequencial. As barras de erro representam o desvio padrão dos valores de \textit{speedup} calculados em cada repetição.
 
 \begin{figure}[H]
     \centering
@@ -68,25 +375,81 @@ A Figura~\ref{fig:speedup} mostra o \textit{speedup} das versões paralelas em r
 \end{figure}
 
 \section{Análise}
+\label{sec:analise}
 
-Preencha esta seção com a interpretação direta dos resultados. Sugestão de pontos a comentar:
+A partir dos resultados coletados,
+formulam-se as seguintes observações e interpretações:
 
 \begin{itemize}
-    \item Em quais entradas OpenMP teve melhor desempenho.
-    \item Em quais entradas MPI teve melhor desempenho.
-    \item Se houve casos em que o paralelismo piorou o desempenho.
-    \item Relação entre tamanho da entrada e ganho de desempenho.
-    \item Possíveis causas de sobrecusto: criação de \textit{threads}, comunicação MPI, sincronização e parada antecipada.
+    \item \textbf{Desempenho relativo entre OpenMP e MPI}:
+    Nas entradas em que o espaço de busca é totalmente explorado (arquivos \texttt{noniso}),
+    o OpenMP e o MPI apresentam desempenho muito próximo,
+    com speedups que variam entre $2,94\times$ e $3,58\times$.
+    No entanto, o OpenMP superou sistematicamente o MPI em praticamente todos os cenários.
+    Esta diferença deve-se ao sobrecusto de inicialização dos processos MPI (\texttt{MPI\_Init}) e à sobrecarga de comunicação necessária para transmitir os grafos via broadcast (\texttt{MPI\_Bcast}) e posteriormente coletar os resultados booleanos finais (\texttt{MPI\_Recv}),
+    fatores inexistentes no OpenMP que utiliza compartilhamento de memória direta na mesma máquina física.
+
+    \item \textbf{Cenários onde o paralelismo degradou o desempenho}:
+    O comportamento mais marcante ocorreu nas entradas \texttt{3\_iso.txt} e \texttt{4\_iso.txt}.
+    Em \texttt{3\_iso.txt},
+    a versão sequencial rodou em apenas $5,33$ microssegundos,
+    pois encontrou a permutação isomórfica logo no início do espaço de busca ($i=0$).
+    Já as versões OpenMP e MPI sofreram uma degradação extrema (tempo de execução de $0,0236$ s e $0,0348$ s, respectivamente),
+    gerando um speedup irrisório de cerca de $0,0002$.
+    Em \texttt{4\_iso.txt}, o sequencial levou $0,2196$ s,
+    enquanto OpenMP levou $0,3193$ s e MPI $0,3042$ s (speedup de $0,72$).
+
+    Esta perda de desempenho é explicada pela \textbf{ausência de um mecanismo dinâmico e eficiente de parada antecipada cooperativa} nas versões paralelas:
+    \begin{itemize}
+        \item No OpenMP,
+        embora a verificação de isomorfismo (\texttt{if (local\_isomorphism) continue;}) pule interações irrelevantes,
+        a especificação da API não permite interromper (\texttt{break}) loops paralelos de forma nativa.
+        Logo, as threads continuam iterando por todos os $N!$ elementos,
+        o que gera overhead de controle de loop sobre milhões de iterações mesmo quando executando somente a condicional.
+        Além disso,
+        mesmo que esse overhead não existisse,
+        a thread 0 ainda teria que esperar todas as outras terminarem.
+        \item No MPI,
+        o espaço de busca é rigidamente dividido em intervalos estáticos.
+        Caso o processo 0 encontre a resposta no início de seu subintervalo,
+        ele precisa aguardar que todos os demais processos varram seus subintervalos completos até o fim e enviem as mensagens de finalização,
+        pois não há comunicação assíncrona intermediária para reportar o sucesso e interromper os demais nós.
+    \end{itemize}
+
+    \item \textbf{Relação entre tamanho da entrada e ganho de desempenho}:
+    Para as entradas de tamanho menor (como \texttt{2\_iso} e \texttt{2\_noniso},
+    de $N=9$ vértices e $362.880$ permutações),
+    o tempo computacional é ínfimo.
+    Nesses casos,
+    o overhead de inicialização do MPI limita seu speedup a apenas $1,39\times$ no caso isomórfico,
+    enquanto o OpenMP consegue aproveitar melhor o paralelismo,
+    com speedup de $2,64\times$.
+    Em entradas maiores ($N=11$,
+    como \texttt{1\_noniso} e \texttt{4\_noniso}),
+    o trabalho computacional passa a dominar completamente os sobrecustos,
+    permitindo que ambas as abordagens atinjam a máxima eficiência de speedup paralela (cerca de $3,3\times$ em 4 núcleos físicos).
 \end{itemize}
 
 \section{Conclusão}
 
-Resumo curto dos resultados principais:
+Os experimentos realizados trazem conclusões importantes sobre a paralelização de algoritmos de força bruta com parada antecipada:
 
 \begin{itemize}
-    \item Melhor abordagem observada: \texttt{preencher}.
-    \item Entradas em que o paralelismo foi vantajoso: \texttt{preencher}.
-    \item Entradas em que o paralelismo não compensou: \texttt{preencher}.
+    \item \textbf{Melhor abordagem observada}:
+    O OpenMP apresentou o melhor desempenho geral,
+    mostrando-se mais leve do que o MPI devido à ausência de custos de comunicação e inicialização em rede/processos na máquina de testes local.
+    \item \textbf{Entradas em que o paralelismo foi vantajoso}:
+    Todas as entradas não-isomórficas (\texttt{1\_noniso.txt},
+    \texttt{2\_noniso.txt},
+    \texttt{3\_noniso.txt},
+    \texttt{4\_noniso.txt}) e a entrada isomórfica menor \texttt{2\_iso.txt}.
+    Nesses cenários,
+    o ganho da divisão computacional sobrepujou o custo de paralelização.
+    \item \textbf{Entradas em que o paralelismo não compensou}:
+    As entradas isomórficas \texttt{3\_iso.txt} e \texttt{4\_iso.txt}.
+    Nelas,
+    a capacidade da versão sequencial de abortar a computação no instante exato em que encontrou a solução foi muito superior à execução paralela estática rígida,
+    evidenciando que a paralelização simples de loops com parada antecipada necessita de estratégias de sincronização dinâmica assíncrona para ser competitiva nestes casos específicos.
 \end{itemize}
 
 \end{document}
